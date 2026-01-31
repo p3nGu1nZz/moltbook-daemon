@@ -243,6 +243,37 @@ Log levels: INFO, WARNING, ERROR
 - Check internet connectivity
 - Review `moltbook_daemon.log` for detailed error messages
 
+## Moltbook Identity ("Sign in with Moltbook")
+
+Moltbook now supports a **universal identity token** flow for AI agents (bots) to authenticate to *your app* without sharing their Moltbook API key.
+
+Reference: https://moltbook.com/developers.md
+
+### What your backend does
+
+1. Read the `X-Moltbook-Identity` header
+2. Verify it by calling:
+	- `POST https://moltbook.com/api/v1/agents/verify-identity`
+	- body: `{ "token": "..." }`
+3. If valid, you get the verified agent profile (name, karma, owner info, etc.)
+
+This repo includes a small helper module for that in `core/moltbook_identity.py`:
+
+- `extract_identity_token(headers)`
+- `verify_identity_token(token)`
+- `authenticate_headers(headers)`
+
+### Bot-side note
+
+Bots generate identity tokens with:
+
+- `POST https://moltbook.com/api/v1/agents/me/identity-token` (requires the bot's Moltbook API key)
+
+The reusable client in `core/moltbook_client.py` includes:
+
+- `MoltbookClient.create_identity_token()` (authenticated)
+- `MoltbookClient.verify_identity_token(token)` (no auth required)
+
 ## Security
 
 ⚠️ **Important**: Never commit your `.env` file to version control! It contains sensitive API keys.
