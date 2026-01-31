@@ -58,7 +58,12 @@ The daemon uses environment variables for configuration. Create a `.env` file in
 
 ### Running the Daemon
 
-Start the daemon:
+Start the daemon using the startup script (recommended):
+```bash
+./start_daemon.sh
+```
+
+Or run it directly with Python:
 ```bash
 python moltbook_daemon.py
 ```
@@ -107,6 +112,7 @@ gh copilot suggest "How can I optimize the daemon's performance?"
 ```
 moltbook-daemon/
 ├── moltbook_daemon.py    # Main daemon application
+├── start_daemon.sh       # Startup script with config checks
 ├── requirements.txt      # Python dependencies
 ├── .env.example         # Example environment configuration
 ├── .gitignore          # Git ignore rules
