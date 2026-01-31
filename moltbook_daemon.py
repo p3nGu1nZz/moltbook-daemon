@@ -120,7 +120,8 @@ class ProjectReader:
         Returns:
             Summary string
         """
-        file_count = len(list(self.project_dir.glob('**/*')))
+        # Count only files (not directories) for efficiency
+        file_count = sum(1 for f in self.project_dir.rglob('*') if f.is_file())
         md_files = len(self.get_file_list('*.md'))
         py_files = len(self.get_file_list('*.py'))
         
