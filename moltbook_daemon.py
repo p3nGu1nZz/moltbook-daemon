@@ -88,6 +88,24 @@ def _project_key(project_dir):
         return str(project_dir)
 
 
+def _truncate(text, max_chars):
+    if max_chars is None:
+        return text
+    try:
+        max_chars = int(max_chars)
+    except Exception:
+        return text
+    if max_chars <= 0:
+        return ""
+    if text is None:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    suffix = "\n\n[truncated]"
+    keep = max(0, max_chars - len(suffix))
+    return text[:keep].rstrip() + suffix
+
+
 class MoltbookClient:
     """Client for interacting with the Moltbook API."""
     
@@ -439,7 +457,12 @@ class MoltbookDaemon:
         dry_run=False,
         once=False,
         post_enabled=False,
+        intro_enabled=False,
+        force_post=False,
         submolt='general',
+        max_content_chars=3500,
+        max_commits=10,
+        max_files=25,
         state_file=None,
     ):
         """Initialize the daemon.
@@ -456,7 +479,12 @@ class MoltbookDaemon:
         self.once = once
         self.dry_run = dry_run
         self.post_enabled = post_enabled
+        self.intro_enabled = intro_enabled
+        self.force_post = force_post
         self.submolt = submolt
+        self.max_content_chars = max_content_chars
+        self.max_commits = max_commits
+        self.max_files = max_files
 
         state_path = (
             state_file
@@ -483,12 +511,24 @@ class MoltbookDaemon:
         delta = self.project_reader.get_delta(
             last_seen=last_seen_head,
             last_scan_epoch=last_scan_epoch,
+            max_commits=self.max_commits,
+            max_files=self.max_files,
         )
 
         logger.info(
             f"Delta mode={delta.get('mode')} has_changes={delta.get('has_changes')} "
             f"head={delta.get('head')}"
         )
+
+        # Optional: one-time intro post for a new project
+        if self.intro_enabled and not proj_state.get('intro_posted'):
+            title, content = self._render_intro_post(delta, project_summary)
+            logger.info("Draft post title: " + title)
+            logger.info("Draft post content preview:\n" + content[:800])
+
+            if self.post_enabled:
+                self._maybe_post_update(proj_key, proj_state, title, content)
+                proj_state['intro_posted'] = True
 
         if delta.get('has_changes'):
             title, content = self._render_update_post(delta, project_summary)
@@ -497,6 +537,13 @@ class MoltbookDaemon:
 
             if self.post_enabled:
                 self._maybe_post_update(proj_key, proj_state, title, content)
+
+        # Optional: force a post even when nothing changed (still cooldown-limited)
+        if self.force_post and self.post_enabled and not delta.get('has_changes'):
+            title, content = self._render_status_post(delta, project_summary)
+            logger.info("Draft post title: " + title)
+            logger.info("Draft post content preview:\n" + content[:800])
+            self._maybe_post_update(proj_key, proj_state, title, content)
 
         # Lightweight heartbeat checks (safe/read-only)
         try:
@@ -524,6 +571,51 @@ class MoltbookDaemon:
             proj_state['last_scan_epoch'] = delta.get('scan_epoch')
         self.state['projects'][proj_key] = proj_state
         self.state_store.save(self.state)
+
+    def _render_intro_post(self, delta, project_summary):
+        project_name = self.project_reader.project_dir.name
+        now_local = time.strftime('%Y-%m-%d %H:%M')
+
+        title = f"Hello Moltbook — tracking {project_name}"
+        head = delta.get('head')
+
+        lines = []
+        lines.append("Hi Moltbook! 🦞")
+        lines.append("")
+        lines.append(f"I'm a daemon agent tracking a local project: **{project_name}**.")
+        if head:
+            lines.append(f"Current git HEAD: `{head[:12]}`")
+        lines.append(f"Started at: {now_local}")
+        lines.append("")
+        lines.append("What I'll post:")
+        lines.append("- Small updates when meaningful changes occur")
+        lines.append("- (Optionally) summaries of recent commits and key file changes")
+        lines.append("")
+        if "README preview:" in project_summary:
+            lines.append("README preview:")
+            lines.append(project_summary.split("README preview:", 1)[1].strip())
+
+        content = _truncate("\n".join(lines).strip(), self.max_content_chars)
+        return title, content
+
+    def _render_status_post(self, delta, project_summary):
+        project_name = self.project_reader.project_dir.name
+        now_local = time.strftime('%Y-%m-%d %H:%M')
+        title = f"{project_name} status ({now_local})"
+
+        lines = []
+        lines.append(f"Project: {project_name}")
+        lines.append("")
+        lines.append("No new changes detected since the last run.")
+        head = delta.get('head')
+        if head:
+            lines.append(f"Current git HEAD: `{head[:12]}`")
+        lines.append("")
+        if "README preview:" in project_summary:
+            lines.append("README preview:")
+            lines.append(project_summary.split("README preview:", 1)[1].strip())
+        content = _truncate("\n".join(lines).strip(), self.max_content_chars)
+        return title, content
 
     def _render_update_post(self, delta, project_summary):
         project_name = self.project_reader.project_dir.name
@@ -561,7 +653,7 @@ class MoltbookDaemon:
             lines.append("README preview:")
             lines.append(project_summary.split("README preview:", 1)[1].strip())
 
-        content = "\n".join(lines).strip()
+        content = _truncate("\n".join(lines).strip(), self.max_content_chars)
         return title, content
 
     def _maybe_post_update(self, proj_key, proj_state, title, content):
@@ -654,9 +746,37 @@ def main():
         help='Actually create Moltbook posts when changes are detected'
     )
     parser.add_argument(
+        '--intro',
+        action='store_true',
+        help='Create a one-time introduction post for this project (also drafted if --post not set)'
+    )
+    parser.add_argument(
+        '--force-post',
+        action='store_true',
+        help='Create a status post even when no changes are detected (requires --post)'
+    )
+    parser.add_argument(
         '--submolt',
         default=None,
         help='Submolt/community to post to (default: MOLTBOOK_SUBMOLT or general)'
+    )
+    parser.add_argument(
+        '--max-content-chars',
+        type=int,
+        default=None,
+        help='Max characters for post content (default: MAX_CONTENT_CHARS env or 3500)'
+    )
+    parser.add_argument(
+        '--max-commits',
+        type=int,
+        default=None,
+        help='Max git commits to include in a post (default: MAX_COMMITS env or 10)'
+    )
+    parser.add_argument(
+        '--max-files',
+        type=int,
+        default=None,
+        help='Max changed files to include in a post (default: MAX_FILES env or 25)'
     )
     parser.add_argument(
         '--state-file',
@@ -684,6 +804,22 @@ def main():
     # Get optional interval (default 5 minutes)
     interval = args.interval if args.interval is not None else int(os.getenv('INTERVAL', '300'))
     submolt = args.submolt or os.getenv('MOLTBOOK_SUBMOLT') or 'general'
+
+    max_content_chars = (
+        args.max_content_chars
+        if args.max_content_chars is not None
+        else int(os.getenv('MAX_CONTENT_CHARS', '3500'))
+    )
+    max_commits = (
+        args.max_commits
+        if args.max_commits is not None
+        else int(os.getenv('MAX_COMMITS', '10'))
+    )
+    max_files = (
+        args.max_files
+        if args.max_files is not None
+        else int(os.getenv('MAX_FILES', '25'))
+    )
     
     # Create and start daemon
     try:
@@ -694,7 +830,12 @@ def main():
             dry_run=args.dry_run,
             once=args.once,
             post_enabled=args.post,
+            intro_enabled=args.intro,
+            force_post=args.force_post,
             submolt=submolt,
+            max_content_chars=max_content_chars,
+            max_commits=max_commits,
+            max_files=max_files,
             state_file=args.state_file,
         )
         daemon.start()

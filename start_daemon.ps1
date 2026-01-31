@@ -16,6 +16,8 @@ param(
     [switch]$Once,
     [switch]$DryRun,
     [switch]$Post,
+    [switch]$Intro,
+    [switch]$ForcePost,
     [string]$Submolt
 )
 
@@ -69,6 +71,8 @@ $argsList = @("moltbook_daemon.py")
 if ($Once) { $argsList += "--once" }
 if ($DryRun) { $argsList += "--dry-run" }
 if ($Post) { $argsList += "--post" }
+if ($Intro) { $argsList += "--intro" }
+if ($ForcePost) { $argsList += "--force-post" }
 if ($Submolt) { $argsList += @("--submolt", $Submolt) }
 
 Write-Host ""

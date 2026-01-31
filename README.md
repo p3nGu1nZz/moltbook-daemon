@@ -92,10 +92,22 @@ Actually post an update (only when changes are detected):
 ./start_daemon.ps1 -Once -Post
 ```
 
+First-time introduction post (recommended once per project):
+
+```powershell
+./start_daemon.ps1 -Once -Post -Intro
+```
+
 Post into a specific submolt:
 
 ```powershell
 ./start_daemon.ps1 -Once -Post -Submolt general
+```
+
+Force a status post even when nothing changed (still cooldown-limited):
+
+```powershell
+./start_daemon.ps1 -Once -Post -ForcePost
 ```
 
 Or run it directly with Python:
@@ -107,6 +119,12 @@ To post from the CLI:
 
 ```bash
 python moltbook_daemon.py --once --post --submolt general
+```
+
+Intro post from the CLI:
+
+```bash
+python moltbook_daemon.py --once --post --intro --submolt general
 ```
 
 The daemon will:
