@@ -16,7 +16,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
-import requests
+from core.moltbook_client import MoltbookClient
+from actions.create_post import create_post as action_create_post
 
 
 # Best-effort: prefer UTF-8 on Windows consoles to avoid crashes when Moltbook
@@ -75,7 +76,10 @@ class StateStore:
 
     def save(self, state):
         try:
-            self.path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding='utf-8')
+            self.path.write_text(
+                json.dumps(state, indent=2, sort_keys=True),
+                encoding='utf-8'
+            )
         except Exception as e:
             logger.warning(f"Failed to write state file {self.path}: {e}")
 
@@ -104,170 +108,6 @@ def _truncate(text, max_chars):
     suffix = "\n\n[truncated]"
     keep = max(0, max_chars - len(suffix))
     return text[:keep].rstrip() + suffix
-
-
-class MoltbookClient:
-    """Client for interacting with the Moltbook API."""
-    
-    def __init__(self, api_key, api_base=None, timeout_s=30, dry_run=False):
-        """Initialize the Moltbook client.
-        
-        Args:
-            api_key: API key for Moltbook authentication
-            api_base: Base URL for the Moltbook API (defaults to https://www.moltbook.com/api/v1)
-            timeout_s: Default request timeout in seconds
-            dry_run: If True, do not perform write operations (POST/PATCH/PUT/DELETE)
-        """
-        self.api_key = api_key
-        self.api_base = (
-            api_base
-            or os.getenv('MOLTBOOK_API_BASE')
-            or "https://www.moltbook.com/api/v1"
-        ).rstrip('/')
-        self.timeout_s = timeout_s
-        self.dry_run = dry_run
-
-        # Moltbook explicitly warns that using the non-www host can redirect and strip
-        # Authorization headers. Keep users out of that foot-gun.
-        if not self.api_base.startswith("https://www.moltbook.com"):
-            logger.warning(
-                "MOLTBOOK_API_BASE should start with https://www.moltbook.com to avoid "
-                "redirects stripping Authorization headers. "
-                f"Current: {self.api_base}"
-            )
-
-        self.session = requests.Session()
-        self.session.headers.update({
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        })
-
-    def _request(self, method, path, **kwargs):
-        """Internal request helper.
-
-        Moltbook warns that redirects can strip the Authorization header. We disable
-        redirects to fail fast with a clear message instead of silently making unauthenticated calls.
-        """
-        if self.dry_run and method.upper() in {'POST', 'PUT', 'PATCH', 'DELETE'}:
-            url = f"{self.api_base}/{path.lstrip('/')}"
-            logger.info(f"DRY_RUN - skipping {method.upper()} {url}")
-            return {
-                "success": True,
-                "dry_run": True,
-                "skipped": True,
-                "method": method.upper(),
-                "path": path,
-            }
-
-        url = f"{self.api_base}/{path.lstrip('/')}"
-        kwargs.setdefault('timeout', self.timeout_s)
-        kwargs.setdefault('allow_redirects', False)
-
-        try:
-            response = self.session.request(method, url, **kwargs)
-        except requests.RequestException as e:
-            logger.error(f"Request failed ({method} {url}): {e}")
-            raise
-
-        if response.is_redirect:
-            location = response.headers.get('Location')
-            raise RuntimeError(
-                "Moltbook API request was redirected (likely non-www host). "
-                "Redirects can strip Authorization headers; refusing to follow. "
-                f"URL={url} Location={location}"
-            )
-
-        # Try to parse JSON (most endpoints return JSON)
-        data = None
-        try:
-            data = response.json()
-        except ValueError:
-            data = None
-
-        if response.status_code == 429:
-            retry_after_minutes = None
-            if isinstance(data, dict):
-                retry_after_minutes = data.get('retry_after_minutes')
-            msg = f"Rate limited (429) calling {method} {url}"
-            if retry_after_minutes is not None:
-                msg += f"; retry_after_minutes={retry_after_minutes}"
-            logger.warning(msg)
-
-        if not response.ok:
-            err = None
-            if isinstance(data, dict):
-                err = data.get('error') or data.get('message')
-            raise RuntimeError(
-                f"Moltbook API error {response.status_code} for {method} {url}: "
-                f"{err or response.text}"
-            )
-
-        return data
-    
-    def test_connection(self):
-        """Test the connection to the Moltbook API."""
-        try:
-            # Official endpoint per skill docs
-            self._request('GET', '/agents/me')
-            return True
-        except requests.RequestException as e:
-            logger.error(f"Connection test failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Connection test failed: {e}")
-            return False
-
-    def get_agent_status(self):
-        """Check claim status."""
-        return self._request('GET', '/agents/status')
-
-    def get_feed(self, sort='new', limit=15):
-        """Get personalized feed (subscribed submolts + followed agents)."""
-        params = {'sort': sort, 'limit': limit}
-        return self._request('GET', '/feed', params=params)
-
-    def list_posts(self, sort='new', limit=15, submolt=None):
-        """List posts globally or for a specific submolt."""
-        params = {'sort': sort, 'limit': limit}
-        if submolt:
-            params['submolt'] = submolt
-        return self._request('GET', '/posts', params=params)
-
-    def create_post(self, submolt, title, content=None, url=None):
-        """Create a post."""
-        payload = {'submolt': submolt, 'title': title}
-        if content is not None:
-            payload['content'] = content
-        if url is not None:
-            payload['url'] = url
-        return self._request('POST', '/posts', json=payload)
-
-    def dm_check(self):
-        """Quick poll for DM activity (for heartbeat)."""
-        return self._request('GET', '/agents/dm/check')
-    
-    def post_message(self, message):
-        """Post a message to Moltbook.
-        
-        Args:
-            message: The message content to post
-            
-        Returns:
-            Response from the API
-        """
-        try:
-            # Backwards-compatible helper: post to m/general with a generic title.
-            # Prefer calling create_post(...) directly.
-            title = f"Update from {time.strftime('%Y-%m-%d %H:%M')}"
-            resp = self.create_post(submolt='general', title=title, content=message)
-            logger.info("Posted message successfully")
-            return resp
-        except requests.RequestException as e:
-            logger.error(f"Failed to post message: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Failed to post message: {e}")
-            return None
 
 
 class ProjectReader:
@@ -464,6 +304,8 @@ class MoltbookDaemon:
         max_commits=10,
         max_files=25,
         state_file=None,
+        api_timeout_s=30,
+        api_retries=2,
     ):
         """Initialize the daemon.
         
@@ -472,7 +314,12 @@ class MoltbookDaemon:
             project_dir: Path to project directory
             interval: Seconds between operations (default: 300)
         """
-        self.client = MoltbookClient(api_key, dry_run=dry_run)
+        self.client = MoltbookClient(
+            api_key,
+            dry_run=dry_run,
+            timeout_s=api_timeout_s,
+            retries=api_retries,
+        )
         self.project_reader = ProjectReader(project_dir)
         self.interval = interval
         self.running = False
@@ -527,8 +374,9 @@ class MoltbookDaemon:
             logger.info("Draft post content preview:\n" + content[:800])
 
             if self.post_enabled:
-                self._maybe_post_update(proj_key, proj_state, title, content)
-                proj_state['intro_posted'] = True
+                posted = self._maybe_post_update(proj_key, proj_state, title, content)
+                if posted:
+                    proj_state['intro_posted'] = True
 
         if delta.get('has_changes'):
             title, content = self._render_update_post(delta, project_summary)
@@ -665,18 +513,25 @@ class MoltbookDaemon:
                     "Skipping post due to Moltbook cooldown (30 min). "
                     f"Next post allowed in ~{int((30 * 60 - age_s) / 60)} min"
                 )
-                return
+                return False
 
         logger.info(f"Posting update to m/{self.submolt} ...")
-        resp = self.client.create_post(submolt=self.submolt, title=title, content=content)
+        resp = action_create_post(
+            self.client,
+            submolt=self.submolt,
+            title=title,
+            content=content,
+        )
         if isinstance(resp, dict) and resp.get('dry_run'):
             logger.info("DRY_RUN - post skipped")
-            return
+            return False
 
         # Best-effort record the post
         proj_state['last_post_at'] = _utc_now_iso()
         if isinstance(resp, dict):
             proj_state['last_post_response'] = resp
+
+        return True
     
     def start(self):
         """Start the daemon."""
@@ -820,6 +675,9 @@ def main():
         if args.max_files is not None
         else int(os.getenv('MAX_FILES', '25'))
     )
+
+    api_timeout_s = int(os.getenv('MOLTBOOK_TIMEOUT_S', '30'))
+    api_retries = int(os.getenv('MOLTBOOK_RETRIES', '2'))
     
     # Create and start daemon
     try:
@@ -837,6 +695,8 @@ def main():
             max_commits=max_commits,
             max_files=max_files,
             state_file=args.state_file,
+            api_timeout_s=api_timeout_s,
+            api_retries=api_retries,
         )
         daemon.start()
     except Exception as e:

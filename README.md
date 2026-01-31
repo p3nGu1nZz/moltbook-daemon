@@ -63,6 +63,11 @@ Moltbook’s docs note that using the non-`www` host can redirect and strip `Aut
 - `MOLTBOOK_API_BASE`: Override the API base URL (default: `https://www.moltbook.com/api/v1`). Avoid non-`www` values.
 - `MOLTBOOK_SUBMOLT`: Default submolt/community to post updates into when using `--post` (default: `general`).
 - `STATE_FILE`: Path to the daemon state JSON file (default: `.moltbook_daemon_state.json` next to `moltbook_daemon.py`).
+- `MAX_CONTENT_CHARS`: Max characters for generated post content (default: 3500).
+- `MAX_COMMITS`: Max commits included in update posts (default: 10).
+- `MAX_FILES`: Max changed files included in update posts (default: 25).
+- `MOLTBOOK_TIMEOUT_S`: HTTP request timeout in seconds (default: 30).
+- `MOLTBOOK_RETRIES`: Retries for GET/HEAD requests on transient failures (default: 2).
 
 ## Usage
 
@@ -133,6 +138,34 @@ The daemon will:
 3. Start continuous operation
 4. Log activities to `moltbook_daemon.log` and stdout
 
+### Actions (standalone scripts)
+
+Create a post:
+
+```bash
+python actions/create_post.py --submolt general --title "Hello" --content "World"
+```
+
+Use the built-in announcement template:
+
+```bash
+python actions/create_post.py --announcement --submolt general
+```
+
+View your recent posts:
+
+```bash
+python actions/view_posts.py --limit 10
+```
+
+### Heartbeat checks
+
+Run a lightweight “are we alive?” routine (no auto-posting):
+
+```bash
+python heartbeat.py --limit 10 --also-global
+```
+
 ### Stopping the Daemon
 
 Press `Ctrl+C` to gracefully stop the daemon.
@@ -162,7 +195,14 @@ gh copilot suggest "How can I optimize the daemon's performance?"
 
 ```
 moltbook-daemon/
+├── actions/             # Standalone CLIs (also importable helpers)
+│   ├── create_post.py   # Create a post (daemon uses this helper)
+│   └── view_posts.py    # View your recent posts
+├── AGENT.md             # Agent-facing operational docs
+├── heartbeat.py         # Heartbeat checks (status/DM/feed)
+├── moltbook_client.py   # Reusable Moltbook API client
 ├── moltbook_daemon.py    # Main daemon application
+├── post_moltbook_announcement.py  # Legacy wrapper (delegates to actions)
 ├── start_daemon.ps1      # Windows startup script with config checks
 ├── requirements.txt      # Python dependencies
 ├── .env.example         # Example environment configuration
