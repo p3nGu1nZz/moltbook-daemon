@@ -22,12 +22,34 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
 from dotenv import load_dotenv
 
 from core.moltbook_client import MoltbookClient
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load_state(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {"version": 1, "projects": {}}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"version": 1, "projects": {}}
+
+
+def _save_state(path: Path, state: Dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(state, indent=2, sort_keys=True, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
@@ -59,7 +81,10 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument(
         "--no-proxy",
         action="store_true",
-        help="Ignore proxy env vars for requests (sets session.trust_env=false)",
+        help=(
+            "Ignore proxy env vars for requests "
+            "(sets session.trust_env=false)"
+        ),
     )
     p.add_argument(
         "--status",
@@ -71,6 +96,14 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         action="store_true",
         help="Print raw JSON responses",
     )
+    p.add_argument(
+        "--state-file",
+        default=None,
+        help=(
+            "State JSON path to update (default: env STATE_FILE or "
+            ".moltbook_daemon_state.json in repo root)"
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -79,7 +112,10 @@ def main(argv: List[str]) -> int:
 
     api_key = os.getenv("MOLTBOOK_API_KEY")
     if not api_key:
-        print("ERROR: MOLTBOOK_API_KEY not set (check your .env)", file=sys.stderr)
+        print(
+            "ERROR: MOLTBOOK_API_KEY not set (check your .env)",
+            file=sys.stderr,
+        )
         return 2
 
     args = _parse_args(argv)
@@ -107,9 +143,13 @@ def main(argv: List[str]) -> int:
     last_err: BaseException | None = None
 
     for attempt in range(1, attempts + 1):
-        print(
+        attempt_msg = (
             f"Authorize attempt {attempt}/{attempts} "
-            f"(timeout={timeout_s}s retries={retries} no_proxy={bool(args.no_proxy)})...",
+            f"(timeout={timeout_s}s retries={retries} "
+            f"no_proxy={bool(args.no_proxy)})..."
+        )
+        print(
+            attempt_msg,
             file=sys.stderr,
             flush=True,
         )
@@ -127,8 +167,12 @@ def main(argv: List[str]) -> int:
                 return 1
 
             if attempt < attempts:
+                warn_msg = (
+                    f"WARN: authorize attempt {attempt}/{attempts} "
+                    f"failed: {e}"
+                )
                 print(
-                    f"WARN: authorize attempt {attempt}/{attempts} failed: {e}",
+                    warn_msg,
                     file=sys.stderr,
                 )
                 if sleep_s > 0:
@@ -141,9 +185,17 @@ def main(argv: List[str]) -> int:
 
     agent = (me.get("agent") or {}) if isinstance(me, dict) else {}
     name = (agent.get("name") or "").strip()
+    agent_id = agent.get("id")
 
     if args.json:
-        print(json.dumps({"me": me}, indent=2, sort_keys=True, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"me": me},
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+        )
     else:
         if name:
             print(f"Authorized as agent: {name}")
@@ -168,6 +220,43 @@ def main(argv: List[str]) -> int:
             )
         else:
             print(f"Agent status: {status}")
+
+    # Persist agent identity + a short-lived identity token into state.
+    state_path = Path(
+        args.state_file
+        or os.getenv("STATE_FILE")
+        or (
+            Path(__file__).resolve().parents[1]
+            / ".moltbook_daemon_state.json"
+        )
+    )
+
+    state = _load_state(state_path)
+    mb = state.setdefault("moltbook", {})
+    mb["agent"] = {"id": agent_id, "name": name or None}
+    mb["last_authorize_at"] = _utc_now_iso()
+
+    # The identity-token flow is primarily for third-party services verifying
+    # an agent. We still store it here because it's short-lived and useful for
+    # integrations.
+    try:
+        token_resp = client.create_identity_token()
+        identity_token = token_resp.get("identity_token")
+        mb["identity"] = {
+            "identity_token": identity_token,
+            "expires_in": token_resp.get("expires_in"),
+            "expires_at": token_resp.get("expires_at"),
+            "fetched_at": _utc_now_iso(),
+        }
+    except (requests.RequestException, RuntimeError) as e:
+        mb["identity"] = {
+            "error": str(e),
+            "fetched_at": _utc_now_iso(),
+        }
+
+    _save_state(state_path, state)
+    if not args.json:
+        print(f"State updated: {state_path}")
 
     return 0
 

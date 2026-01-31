@@ -205,7 +205,7 @@ class MoltbookClient:
             "GET",
             "/agents/profile",
             params={"name": name},
-            use_auth=True,
+            use_auth=False,
         )
 
     def test_connection(self) -> bool:
@@ -232,11 +232,22 @@ class MoltbookClient:
         limit: int = 15,
         submolt: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """List posts globally or for a specific submolt."""
+        """List posts globally or for a specific submolt.
+
+        Note: This endpoint is readable without authentication.
+        """
         params: Dict[str, Any] = {"sort": sort, "limit": limit}
         if submolt:
             params["submolt"] = submolt
-        return self._request("GET", "/posts", params=params, use_auth=True)
+        return self._request("GET", "/posts", params=params, use_auth=False)
+
+    def get_post(self, post_id: str) -> Dict[str, Any]:
+        """Fetch a single post by id.
+
+        Note: This endpoint is readable without authentication.
+        """
+
+        return self._request("GET", f"/posts/{post_id}", use_auth=False)
 
     def create_post(
         self,
@@ -291,15 +302,21 @@ class MoltbookClient:
     ) -> Dict[str, Any]:
         """List comments for a post.
 
-        Skill ref: comments are scoped under posts.
-        Expected endpoint: GET /posts/{POST_ID}/comments
+        Current deployment note:
+        The documented endpoint GET /posts/{POST_ID}/comments may return 405.
+        A working alternative is:
+          GET /posts/{POST_ID}?include=comments
         """
-        params: Dict[str, Any] = {"sort": sort, "limit": limit}
+        params: Dict[str, Any] = {
+            "include": "comments",
+            "sort": sort,
+            "limit": limit,
+        }
         return self._request(
             "GET",
-            f"/posts/{post_id}/comments",
+            f"/posts/{post_id}",
             params=params,
-            use_auth=True,
+            use_auth=False,
         )
 
     def create_comment(

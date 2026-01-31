@@ -40,7 +40,9 @@ def _utc_now_iso() -> str:
 
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Reply to comments on your Moltbook posts")
+    p = argparse.ArgumentParser(
+        description="Reply to comments on your Moltbook posts"
+    )
     p.add_argument(
         "--post-id",
         default=None,
@@ -66,7 +68,10 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument(
         "--state-file",
         default=None,
-        help="State JSON path (default: env STATE_FILE or .moltbook_daemon_state.json)",
+        help=(
+            "State JSON path (default: env STATE_FILE or "
+            ".moltbook_daemon_state.json)"
+        ),
     )
     p.add_argument(
         "--dry-run",
@@ -109,15 +114,20 @@ def _load_state(path: Path) -> Dict[str, Any]:
         return {"version": 1, "projects": {}}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return {"version": 1, "projects": {}}
 
 
 def _save_state(path: Path, state: Dict[str, Any]) -> None:
-    path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(state, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
-def _extract_posts_from_profile(profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _extract_posts_from_profile(
+    profile: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     posts = profile.get("recentPosts") or []
     if not isinstance(posts, list):
         return []
@@ -161,7 +171,10 @@ def _parent_id(c: Dict[str, Any]) -> Optional[str]:
     return v if isinstance(v, str) and v else None
 
 
-def _infer_responded_to(comments: List[Dict[str, Any]], my_agent_id: Optional[str]) -> set[str]:
+def _infer_responded_to(
+    comments: List[Dict[str, Any]],
+    my_agent_id: Optional[str],
+) -> set[str]:
     responded: set[str] = set()
     if not my_agent_id:
         return responded
@@ -179,20 +192,12 @@ def _infer_responded_to(comments: List[Dict[str, Any]], my_agent_id: Optional[st
 
 def _default_reply(author: str, excerpt: str) -> str:
     # Keep it short and friendly; avoid over-promising.
-    excerpt = excerpt.strip()
-    if len(excerpt) > 140:
-        excerpt = excerpt[:137].rstrip() + "…"
-
-    if excerpt:
-        return (
-            f"Thanks {author}! Appreciate you taking the time to read it. "
-            f"Re: “{excerpt}” — totally fair. We’re iterating fast; "
-            "I’ll share an update as we improve this."  # noqa: ISC003
-        )
-
+    # NOTE: We intentionally do NOT quote the comment text in automated replies
+    # (it may contain unsafe language, links, or personal data).
+    _ = excerpt
     return (
         f"Thanks {author}! Appreciate the comment — we’re iterating fast and "
-        "I’ll post updates as the daemon gets smarter."  # noqa: ISC003
+        "I’ll share updates as the daemon gets smarter."  # noqa: ISC003
     )
 
 
@@ -200,9 +205,6 @@ def main(argv: List[str]) -> int:
     load_dotenv()
 
     api_key = os.getenv("MOLTBOOK_API_KEY")
-    if not api_key:
-        print("ERROR: MOLTBOOK_API_KEY not set (check your .env)", file=sys.stderr)
-        return 2
 
     args = _parse_args(argv)
 
@@ -220,25 +222,67 @@ def main(argv: List[str]) -> int:
     state_path = Path(
         args.state_file
         or os.getenv("STATE_FILE")
-        or (Path(__file__).resolve().parents[1] / ".moltbook_daemon_state.json")
+        or (
+            Path(__file__).resolve().parents[1]
+            / ".moltbook_daemon_state.json"
+        )
     )
 
-    client = MoltbookClient(api_key, timeout_s=timeout_s, retries=retries)
+    state = _load_state(state_path)
+    mb = state.get("moltbook") if isinstance(state, dict) else None
+    mb_agent = (mb.get("agent") if isinstance(mb, dict) else None) or {}
+    my_agent_id = mb_agent.get("id")
+    my_agent_name = str(mb_agent.get("name") or "").strip() or None
 
-    # Identify ourselves
-    try:
-        me = client.get_me()
-    except (requests.RequestException, RuntimeError) as e:
-        print(f"ERROR: failed to auth: {e}", file=sys.stderr)
-        return 1
-
-    agent = (me.get("agent") or {}) if isinstance(me, dict) else {}
-    my_agent_id = agent.get("id")
-    my_agent_name = str(agent.get("name") or "").strip() or None
-
+    # Prefer running after authorize so we can avoid using the API key unless
+    # we're actually going to post replies.
     if not my_agent_name:
-        print("ERROR: could not determine agent name", file=sys.stderr)
-        return 1
+        if not api_key:
+            print(
+                "ERROR: agent name not found in state and "
+                "MOLTBOOK_API_KEY is not set. "
+                "Run: python -m core.authorize",
+                file=sys.stderr,
+            )
+            return 2
+
+        client_auth = MoltbookClient(
+            api_key,
+            timeout_s=timeout_s,
+            retries=retries,
+        )
+        try:
+            me = client_auth.get_me()
+        except (requests.RequestException, RuntimeError) as e:
+            print(f"ERROR: failed to auth: {e}", file=sys.stderr)
+            return 1
+
+        agent = (me.get("agent") or {}) if isinstance(me, dict) else {}
+        my_agent_id = agent.get("id")
+        my_agent_name = str(agent.get("name") or "").strip() or None
+        if not my_agent_name:
+            print("ERROR: could not determine agent name", file=sys.stderr)
+            return 1
+
+        state.setdefault("moltbook", {})["agent"] = {
+            "id": my_agent_id,
+            "name": my_agent_name,
+        }
+        _save_state(state_path, state)
+
+    if not args.dry_run and not api_key:
+        print(
+            "ERROR: MOLTBOOK_API_KEY not set (check your .env). "
+            "It is required to post replies.",
+            file=sys.stderr,
+        )
+        return 2
+
+    client = MoltbookClient(
+        api_key=api_key,
+        timeout_s=timeout_s,
+        retries=retries,
+    )
 
     # Choose posts
     posts: List[Dict[str, Any]] = []
@@ -251,12 +295,12 @@ def main(argv: List[str]) -> int:
         print("ERROR: specify --post-id or --all", file=sys.stderr)
         return 2
 
-    state = _load_state(state_path)
     mb = state.setdefault("moltbook", {})
     mb["agent"] = {"id": my_agent_id, "name": my_agent_name}
     mb_posts = mb.setdefault("posts", {})
 
     replies_sent = 0
+    would_reply_count = 0
     max_replies = max(0, int(args.max_replies))
     sleep_s = max(0.0, float(args.sleep_s))
 
@@ -273,7 +317,8 @@ def main(argv: List[str]) -> int:
             if isinstance(cid, str)
         )
 
-        # Refresh comments from API so we don't double-reply even if state is stale.
+        # Refresh comments from API so we don't double-reply
+        # even if state is stale.
         try:
             payload = client.get_post_comments(
                 post_id,
@@ -281,12 +326,17 @@ def main(argv: List[str]) -> int:
                 limit=max(1, int(args.limit)),
             )
         except (requests.RequestException, RuntimeError) as e:
-            print(f"WARN: failed to fetch comments for post {post_id}: {e}")
+            msg = str(e)
+            print(f"WARN: failed to fetch comments for post {post_id}: {msg}")
+            entry["last_comments_sync_at"] = _utc_now_iso()
+            entry["comments_api_last_error"] = msg
             continue
 
         comments = _extract_comments_list(payload)
         responded_api = _infer_responded_to(comments, my_agent_id)
         responded = responded_state | responded_api
+
+        replied_this_post = 0
 
         # Persist a compact snapshot (optional but useful for audits)
         compact: Dict[str, Any] = {}
@@ -332,8 +382,11 @@ def main(argv: List[str]) -> int:
         print(f"Post {post_id}: {len(pending)} pending comment(s)")
 
         for c in pending:
-            if max_replies and replies_sent >= max_replies:
-                break
+            if max_replies:
+                if args.dry_run and would_reply_count >= max_replies:
+                    break
+                if not args.dry_run and replies_sent >= max_replies:
+                    break
 
             cid = str(c.get("id"))
             _, author_name = _comment_author(c)
@@ -341,23 +394,34 @@ def main(argv: List[str]) -> int:
 
             excerpt = _comment_content(c)
 
+            # Safety: do not echo comment text back in automated replies.
+            # We still accept user-provided templates, but {excerpt} will be
+            # replaced with a neutral placeholder.
+            excerpt_placeholder = "(excerpt omitted)"
+
             reply_text = args.reply_text
             if isinstance(reply_text, str) and reply_text.strip():
                 rendered = reply_text
                 rendered = rendered.replace("{author}", author_name)
-                rendered = rendered.replace("{excerpt}", excerpt.strip())
+                rendered = rendered.replace("{excerpt}", excerpt_placeholder)
                 content = rendered
             else:
                 content = _default_reply(author_name, excerpt)
 
             if args.dry_run:
-                print(f"DRY_RUN: would reply to comment {cid} on post {post_id}")
+                print(
+                    f"DRY_RUN: would reply to comment {cid} on post {post_id}"
+                )
                 print(f"  -> {content}")
-                responded.add(cid)
+                would_reply_count += 1
                 continue
 
             try:
-                resp = client.create_comment(post_id, content=content, parent_id=cid)
+                resp = client.create_comment(
+                    post_id,
+                    content=content,
+                    parent_id=cid,
+                )
             except (requests.RequestException, RuntimeError) as e:
                 print(f"WARN: failed to reply to comment {cid}: {e}")
                 continue
@@ -369,13 +433,15 @@ def main(argv: List[str]) -> int:
             print(f"Replied to comment {cid} on post {post_id}")
             replies_sent += 1
             responded.add(cid)
+            replied_this_post += 1
 
             if sleep_s > 0:
                 time.sleep(sleep_s)
 
         # Update state for this post
         entry["responded_to_comment_ids"] = sorted(responded)
-        entry["last_replied_at"] = _utc_now_iso()
+        if replied_this_post > 0 and not args.dry_run:
+            entry["last_replied_at"] = _utc_now_iso()
 
         if max_replies and replies_sent >= max_replies:
             break
@@ -384,7 +450,10 @@ def main(argv: List[str]) -> int:
     print(f"State updated: {state_path}")
 
     if args.dry_run:
-        print("DRY_RUN complete: no comments were posted")
+        print(
+            f"DRY_RUN complete: would reply to "
+            f"{would_reply_count} comment(s)"
+        )
     else:
         print(f"Done. Replies sent: {replies_sent}")
 
