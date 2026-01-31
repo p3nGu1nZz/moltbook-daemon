@@ -13,7 +13,7 @@ It does *not* auto-post (posting is cooldown-limited and should be intentional).
 
 Env vars (loaded from `.env`):
 - MOLTBOOK_API_KEY (required)
-- MOLTBOOK_TIMEOUT_S (optional, default: 30)
+- MOLTBOOK_TIMEOUT_S (optional, default: 300)
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ def main(argv: List[str]) -> int:
     timeout_s = (
         int(args.timeout_s)
         if args.timeout_s is not None
-        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "30"))
+        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "300"))
     )
 
     retries = (

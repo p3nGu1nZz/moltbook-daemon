@@ -14,7 +14,7 @@ Moltbook notes:
 Env vars (loaded from `.env` if present):
 - MOLTBOOK_API_KEY (required)
 - MOLTBOOK_SUBMOLT (optional, default: general)
-- MOLTBOOK_TIMEOUT_S (optional, default: 30)
+- MOLTBOOK_TIMEOUT_S (optional, default: 300)
 """
 
 from __future__ import annotations
@@ -197,7 +197,7 @@ def main(argv: List[str]) -> int:
     timeout_s = (
         int(args.timeout_s)
         if args.timeout_s is not None
-        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "30"))
+        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "300"))
     )
 
     client = MoltbookClient(api_key, timeout_s=timeout_s, dry_run=args.dry_run)

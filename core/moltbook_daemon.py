@@ -632,7 +632,7 @@ def main():
         else int(os.getenv('MAX_FILES', '25'))
     )
 
-    api_timeout_s = int(os.getenv('MOLTBOOK_TIMEOUT_S', '30'))
+    api_timeout_s = int(os.getenv('MOLTBOOK_TIMEOUT_S', '300'))
     api_retries = int(os.getenv('MOLTBOOK_RETRIES', '2'))
     
     # Create and start daemon

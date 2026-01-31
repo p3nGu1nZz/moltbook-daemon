@@ -30,7 +30,7 @@ class MoltbookClient:
         self,
         api_key: str,
         api_base: Optional[str] = None,
-        timeout_s: int = 30,
+        timeout_s: int = 300,
         dry_run: bool = False,
         retries: int = 2,
         retry_backoff_s: float = 1.0,

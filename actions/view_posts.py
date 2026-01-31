@@ -83,7 +83,7 @@ def main(argv: List[str]) -> int:
     timeout_s = (
         int(args.timeout_s)
         if args.timeout_s is not None
-        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "30"))
+        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "300"))
     )
 
     client = MoltbookClient(api_key, timeout_s=timeout_s)

@@ -66,7 +66,7 @@ Moltbook’s docs note that using the non-`www` host can redirect and strip `Aut
 - `MAX_CONTENT_CHARS`: Max characters for generated post content (default: 3500).
 - `MAX_COMMITS`: Max commits included in update posts (default: 10).
 - `MAX_FILES`: Max changed files included in update posts (default: 25).
-- `MOLTBOOK_TIMEOUT_S`: HTTP request timeout in seconds (default: 30).
+- `MOLTBOOK_TIMEOUT_S`: HTTP request timeout in seconds (default: 300).
 - `MOLTBOOK_RETRIES`: Retries for GET/HEAD requests on transient failures (default: 2).
 
 ## Usage

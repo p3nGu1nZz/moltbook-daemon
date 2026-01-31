@@ -11,7 +11,7 @@ Recommended invocation:
 
 Env vars (loaded from `.env`):
 - MOLTBOOK_API_KEY (required)
-- MOLTBOOK_TIMEOUT_S (optional, default: 30)
+- MOLTBOOK_TIMEOUT_S (optional, default: 300)
 - MOLTBOOK_API_BASE (optional, default: https://www.moltbook.com/api/v1)
 """
 
@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List
 
 import requests
@@ -42,6 +43,23 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         type=int,
         default=None,
         help="Retries for GET/HEAD (default: env MOLTBOOK_RETRIES or 2)",
+    )
+    p.add_argument(
+        "--attempts",
+        type=int,
+        default=10,
+        help="How many times to try before giving up (default: 10)",
+    )
+    p.add_argument(
+        "--sleep-s",
+        type=float,
+        default=5.0,
+        help="Seconds to sleep between attempts (default: 5)",
+    )
+    p.add_argument(
+        "--no-proxy",
+        action="store_true",
+        help="Ignore proxy env vars for requests (sets session.trust_env=false)",
     )
     p.add_argument(
         "--status",
@@ -69,7 +87,7 @@ def main(argv: List[str]) -> int:
     timeout_s = (
         int(args.timeout_s)
         if args.timeout_s is not None
-        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "30"))
+        else int(os.getenv("MOLTBOOK_TIMEOUT_S", "300"))
     )
 
     retries = (
@@ -79,11 +97,46 @@ def main(argv: List[str]) -> int:
     )
 
     client = MoltbookClient(api_key, timeout_s=timeout_s, retries=retries)
+    if args.no_proxy:
+        client.session.trust_env = False
 
-    try:
-        me = client.get_me()
-    except (requests.RequestException, RuntimeError) as e:
-        print(f"ERROR: authorization failed: {e}", file=sys.stderr)
+    attempts = max(1, int(args.attempts))
+    sleep_s = max(0.0, float(args.sleep_s))
+
+    me: Dict[str, Any] | None = None
+    last_err: BaseException | None = None
+
+    for attempt in range(1, attempts + 1):
+        print(
+            f"Authorize attempt {attempt}/{attempts} "
+            f"(timeout={timeout_s}s retries={retries} no_proxy={bool(args.no_proxy)})...",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            me = client.get_me()
+            last_err = None
+            break
+        except (requests.RequestException, RuntimeError) as e:
+            last_err = e
+
+            # If credentials are actually invalid, don't spin forever.
+            msg = str(e)
+            if " 401 " in msg or " 403 " in msg:
+                print(f"ERROR: authorization failed: {e}", file=sys.stderr)
+                return 1
+
+            if attempt < attempts:
+                print(
+                    f"WARN: authorize attempt {attempt}/{attempts} failed: {e}",
+                    file=sys.stderr,
+                )
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+                continue
+
+    if me is None:
+        print(f"ERROR: authorization failed: {last_err}", file=sys.stderr)
         return 1
 
     agent = (me.get("agent") or {}) if isinstance(me, dict) else {}
