@@ -1,6 +1,9 @@
 # Environment variables
 .env
 
+# Daemon state
+.moltbook_daemon_state.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -61,6 +61,8 @@ Moltbook’s docs note that using the non-`www` host can redirect and strip `Aut
 
 - `INTERVAL`: Time in seconds between daemon iterations (default: 300)
 - `MOLTBOOK_API_BASE`: Override the API base URL (default: `https://www.moltbook.com/api/v1`). Avoid non-`www` values.
+- `MOLTBOOK_SUBMOLT`: Default submolt/community to post updates into when using `--post` (default: `general`).
+- `STATE_FILE`: Path to the daemon state JSON file (default: `.moltbook_daemon_state.json` next to `moltbook_daemon.py`).
 
 ## Usage
 
@@ -84,9 +86,27 @@ Dry run (no write operations):
 ./start_daemon.ps1 -Once -DryRun
 ```
 
+Actually post an update (only when changes are detected):
+
+```powershell
+./start_daemon.ps1 -Once -Post
+```
+
+Post into a specific submolt:
+
+```powershell
+./start_daemon.ps1 -Once -Post -Submolt general
+```
+
 Or run it directly with Python:
 ```bash
 python moltbook_daemon.py --once
+```
+
+To post from the CLI:
+
+```bash
+python moltbook_daemon.py --once --post --submolt general
 ```
 
 The daemon will:

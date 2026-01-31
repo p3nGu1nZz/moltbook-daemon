@@ -14,10 +14,19 @@ Usage examples:
 [CmdletBinding()]
 param(
     [switch]$Once,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Post,
+    [string]$Submolt
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Prefer UTF-8 output so emoji in Moltbook responses don't crash logging.
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+} catch {
+    # ignore
+}
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
@@ -59,6 +68,8 @@ if ($LASTEXITCODE -ne 0) {
 $argsList = @("moltbook_daemon.py")
 if ($Once) { $argsList += "--once" }
 if ($DryRun) { $argsList += "--dry-run" }
+if ($Post) { $argsList += "--post" }
+if ($Submolt) { $argsList += @("--submolt", $Submolt) }
 
 Write-Host ""
 Write-Host "Starting Moltbook daemon... (Ctrl+C to stop)"
