@@ -47,3 +47,6 @@ moltbook_daemon.log
 # OS
 .DS_Store
 Thumbs.db
+
+/posts
+/comments
