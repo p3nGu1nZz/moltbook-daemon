@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reply to comments on your Moltbook posts (safely).
+"""Reply to comments on your Moltbook posts (safely + uniquely).
 
 Goals:
 - avoid double-replying to the same comment
@@ -14,8 +14,13 @@ Safety strategy:
   a reply from us (via parent_id + our agent id)
 - we also store responded_to_comment_ids in state, and check both sources
 
-This script uses a simple default reply template. You can override it with
---reply-text.
+Workflow (fully automated):
+- For each pending top-level comment, generate a unique reply that matches tone
+    (helpful for questions, calm for nasty comments, etc.).
+- Save the reply text to a markdown file for auditability.
+- Post the reply (unless --dry-run or --draft-only).
+
+Draft files contain ONLY the reply text (no metadata/frontmatter).
 """
 
 from __future__ import annotations
@@ -33,6 +38,13 @@ import requests
 from dotenv import load_dotenv
 
 from core.moltbook_client import MoltbookClient
+from core.comment_reply_policy import (
+    CommentContext,
+    generate_reply_text,
+    get_project_dir_from_env,
+    load_persona,
+    reply_hash,
+)
 
 
 def _utc_now_iso() -> str:
@@ -76,7 +88,10 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not create comments; just show what would be replied to",
+        help=(
+            "Do not create comments; show what would be sent. "
+            "Reply files may still be written locally."
+        ),
     )
     p.add_argument(
         "--max-replies",
@@ -91,9 +106,32 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         help="Seconds to sleep between replies (default: 2.0)",
     )
     p.add_argument(
-        "--reply-text",
+        "--draft-only",
+        action="store_true",
+        help="Only write reply markdown files; do not post replies",
+    )
+    p.add_argument(
+        "--draft-dir",
         default=None,
-        help="Override reply text (use {author} and {excerpt} placeholders)",
+        help=(
+            "Draft output dir (default: comments/replies in repo root). "
+            "Drafts are stored as <draft-dir>/<post_id>/<comment_id>.md"
+        ),
+    )
+    p.add_argument(
+        "--persona-file",
+        default=None,
+        help=(
+            "Persona markdown to guide drafting (default: comments/PERSONA.md)"
+        ),
+    )
+    p.add_argument(
+        "--project-dir",
+        default=None,
+        help=(
+            "Local project dir to search for answers "
+            "(default: env PROJECT_DIR)"
+        ),
     )
     p.add_argument(
         "--sort",
@@ -190,19 +228,13 @@ def _infer_responded_to(
     return responded
 
 
-def _default_reply(author: str, excerpt: str) -> str:
-    # Keep it short and friendly; avoid over-promising.
-    # NOTE: We intentionally do NOT quote the comment text in automated replies
-    # (it may contain unsafe language, links, or personal data).
-    _ = excerpt
-    return (
-        f"Thanks {author}! Appreciate the comment — we’re iterating fast and "
-        "I’ll share updates as the daemon gets smarter."  # noqa: ISC003
-    )
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
 
 
 def main(argv: List[str]) -> int:
-    load_dotenv()
+    repo_root = _repo_root()
+    load_dotenv(dotenv_path=repo_root / ".env")
 
     api_key = os.getenv("MOLTBOOK_API_KEY")
 
@@ -270,7 +302,9 @@ def main(argv: List[str]) -> int:
         }
         _save_state(state_path, state)
 
-    if not args.dry_run and not api_key:
+    # Writing reply files does not require API key. Posting replies does.
+    will_post = (not args.dry_run) and (not args.draft_only)
+    if will_post and not api_key:
         print(
             "ERROR: MOLTBOOK_API_KEY not set (check your .env). "
             "It is required to post replies.",
@@ -283,6 +317,26 @@ def main(argv: List[str]) -> int:
         timeout_s=timeout_s,
         retries=retries,
     )
+
+    draft_root = Path(args.draft_dir) if args.draft_dir else (
+        repo_root / "comments" / "replies"
+    )
+    persona_path = Path(args.persona_file) if args.persona_file else (
+        repo_root / "comments" / "PERSONA.md"
+    )
+    persona_text = load_persona(persona_path)
+    project_dir = (
+        str(args.project_dir).strip()
+        if args.project_dir is not None
+        else get_project_dir_from_env()
+    )
+    if project_dir:
+        project_dir = os.path.expandvars(project_dir)
+        project_dir = str(Path(project_dir).expanduser())
+    if project_dir:
+        print(f"PROJECT_DIR={project_dir}")
+    else:
+        print("PROJECT_DIR is not set; replies will be less specific")
 
     # Choose posts
     posts: List[Dict[str, Any]] = []
@@ -298,9 +352,21 @@ def main(argv: List[str]) -> int:
     mb = state.setdefault("moltbook", {})
     mb["agent"] = {"id": my_agent_id, "name": my_agent_name}
     mb_posts = mb.setdefault("posts", {})
+    mb.setdefault("sent_reply_hashes", [])
+    mb.setdefault("sent_reply_hashes_by_author", {})
+
+    prior_hashes_global = set(
+        h
+        for h in mb.get("sent_reply_hashes", [])
+        if isinstance(h, str) and h
+    )
+    run_hashes_global: set[str] = set()
+    run_hashes_by_author: Dict[str, set[str]] = {}
 
     replies_sent = 0
     would_reply_count = 0
+    reply_files_written = 0
+    replies_duplicate_avoided = 0
     max_replies = max(0, int(args.max_replies))
     sleep_s = max(0.0, float(args.sleep_s))
 
@@ -311,6 +377,9 @@ def main(argv: List[str]) -> int:
 
         entry = mb_posts.setdefault(post_id, {})
         entry.setdefault("responded_to_comment_ids", [])
+        entry.setdefault("sent_reply_hashes", [])
+        entry.setdefault("reply_files", {})
+        entry.setdefault("sent_replies", {})
         responded_state = set(
             cid
             for cid in entry.get("responded_to_comment_ids", [])
@@ -381,6 +450,14 @@ def main(argv: List[str]) -> int:
 
         print(f"Post {post_id}: {len(pending)} pending comment(s)")
 
+        # Enforce per-post uniqueness: track hashes we already sent.
+        prior_hashes = set(
+            h
+            for h in entry.get("sent_reply_hashes", [])
+            if isinstance(h, str) and h
+        )
+        run_hashes: set[str] = set()
+
         for c in pending:
             if max_replies:
                 if args.dry_run and would_reply_count >= max_replies:
@@ -389,42 +466,195 @@ def main(argv: List[str]) -> int:
                     break
 
             cid = str(c.get("id"))
-            _, author_name = _comment_author(c)
+            author_id, author_name = _comment_author(c)
             author_name = author_name or "there"
+            author_key = (
+                str(author_id).strip()
+                if isinstance(author_id, str) and author_id.strip()
+                else str(author_name).strip().lower()
+            )
+            prior_hashes_author = set(
+                h
+                for h in (
+                    mb.get("sent_reply_hashes_by_author", {}).get(
+                        author_key,
+                        [],
+                    )
+                )
+                if isinstance(h, str) and h
+            )
+            run_hashes_by_author.setdefault(author_key, set())
 
-            excerpt = _comment_content(c)
+            comment_text = _comment_content(c)
+            created_at = c.get("created_at") or c.get("createdAt")
 
-            # Safety: do not echo comment text back in automated replies.
-            # We still accept user-provided templates, but {excerpt} will be
-            # replaced with a neutral placeholder.
-            excerpt_placeholder = "(excerpt omitted)"
+            draft_path = draft_root / post_id / f"{cid}.md"
+            draft_path.parent.mkdir(parents=True, exist_ok=True)
 
-            reply_text = args.reply_text
-            if isinstance(reply_text, str) and reply_text.strip():
-                rendered = reply_text
-                rendered = rendered.replace("{author}", author_name)
-                rendered = rendered.replace("{excerpt}", excerpt_placeholder)
-                content = rendered
-            else:
-                content = _default_reply(author_name, excerpt)
+            ctx = CommentContext(
+                post_id=post_id,
+                comment_id=cid,
+                author_name=author_name,
+                comment_text=comment_text,
+                created_at=str(created_at) if created_at else None,
+            )
+            reply_text = generate_reply_text(
+                ctx,
+                persona_text=persona_text,
+                project_dir=project_dir,
+            ).strip()
+
+            # Enforce uniqueness automatically (per-post, per-author, global).
+            h = reply_hash(reply_text)
+            if (
+                h in prior_hashes
+                or h in run_hashes
+                or h in prior_hashes_author
+                or h in run_hashes_by_author[author_key]
+                or h in prior_hashes_global
+                or h in run_hashes_global
+            ):
+                # Try a few small variations without echoing comment text.
+                suffixes = [
+                    " Quick question: what outcome were you expecting?",
+                    " Quick check: what platform/engine are you on?",
+                    " If you can share your exact steps, I can verify it.",
+                    " If you can share a minimal repro, I’ll chase it down.",
+                    " If you can share what you expected vs what happened, I can fix it.",
+                ]
+                for attempt in range(1, 11):
+                    suffix = suffixes[(attempt - 1) % len(suffixes)]
+                    candidate = (reply_text + suffix).strip()
+                    h2 = reply_hash(candidate)
+                    if (
+                        h2 not in prior_hashes
+                        and h2 not in run_hashes
+                        and h2 not in prior_hashes_author
+                        and h2 not in run_hashes_by_author[author_key]
+                        and h2 not in prior_hashes_global
+                        and h2 not in run_hashes_global
+                    ):
+                        reply_text = candidate
+                        h = h2
+                        replies_duplicate_avoided += 1
+                        break
+
+            if (
+                h in prior_hashes
+                or h in run_hashes
+                or h in prior_hashes_author
+                or h in run_hashes_by_author[author_key]
+                or h in prior_hashes_global
+                or h in run_hashes_global
+            ):
+                # Last resort: add a tiny deterministic tag to guarantee
+                # uniqueness without including any of the original comment.
+                tag = reply_hash(cid)[:6]
+                candidate = (reply_text + f" (ref {tag})").strip()
+                h2 = reply_hash(candidate)
+                if (
+                    h2 not in prior_hashes
+                    and h2 not in run_hashes
+                    and h2 not in prior_hashes_author
+                    and h2 not in run_hashes_by_author[author_key]
+                    and h2 not in prior_hashes_global
+                    and h2 not in run_hashes_global
+                ):
+                    reply_text = candidate
+                    h = h2
+                    replies_duplicate_avoided += 1
+
+            if (
+                h in prior_hashes
+                or h in run_hashes
+                or h in prior_hashes_author
+                or h in run_hashes_by_author[author_key]
+                or h in prior_hashes_global
+                or h in run_hashes_global
+            ):
+                print(
+                    "WARN: could not generate a unique reply for post "
+                    f"{post_id} comment {cid}; skipping"
+                )
+                continue
+
+            run_hashes.add(h)
+            run_hashes_global.add(h)
+            run_hashes_by_author[author_key].add(h)
+
+            # Write audit file (text only, no metadata).
+            try:
+                draft_path.write_text(reply_text + "\n", encoding="utf-8")
+            except OSError as e:
+                print(f"WARN: failed to write reply file {draft_path}: {e}")
+                continue
+
+            entry["reply_files"][cid] = {
+                "path": str(draft_path),
+                "hash": h,
+                "generated_at": _utc_now_iso(),
+                "project_dir": project_dir,
+            }
+            reply_files_written += 1
 
             if args.dry_run:
                 print(
-                    f"DRY_RUN: would reply to comment {cid} on post {post_id}"
+                    f"DRY_RUN: would reply to comment {cid} "
+                    f"on post {post_id} (file {draft_path})"
                 )
-                print(f"  -> {content}")
+                print(f"  -> {reply_text}")
                 would_reply_count += 1
+                continue
+
+            if args.draft_only:
+                # Audit-only mode.
                 continue
 
             try:
                 resp = client.create_comment(
                     post_id,
-                    content=content,
+                    content=reply_text,
                     parent_id=cid,
                 )
             except (requests.RequestException, RuntimeError) as e:
-                print(f"WARN: failed to reply to comment {cid}: {e}")
-                continue
+                msg = str(e)
+
+                # Moltbook comment posting has occasionally behaved
+                # inconsistently across deployments. If we see an auth failure,
+                # retry once with a fresh session to rule out a bad client
+                # state, then abort the run to avoid spamming.
+                is_auth_failure = (
+                    " 401 " in msg
+                    or " 403 " in msg
+                    or "Authentication required" in msg
+                )
+                if is_auth_failure:
+                    try:
+                        retry_client = MoltbookClient(
+                            api_key=api_key,
+                            timeout_s=timeout_s,
+                            retries=retries,
+                        )
+                        resp = retry_client.create_comment(
+                            post_id,
+                            content=reply_text,
+                            parent_id=cid,
+                        )
+                        client = retry_client
+                    except (requests.RequestException, RuntimeError) as e2:
+                        print(
+                            "ERROR: Moltbook rejected comment posting "
+                            "(auth failure). Your reply files were written, "
+                            "but posting is currently blocked.\n"
+                            f"First error: {msg}\n"
+                            f"Retry error: {e2}",
+                            file=sys.stderr,
+                        )
+                        return 1
+
+                else:
+                    print(f"WARN: failed to reply to comment {cid}: {msg}")
+                    continue
 
             if isinstance(resp, dict) and resp.get("dry_run"):
                 print("DRY_RUN - reply skipped")
@@ -434,6 +664,19 @@ def main(argv: List[str]) -> int:
             replies_sent += 1
             responded.add(cid)
             replied_this_post += 1
+            prior_hashes.add(h)
+            prior_hashes_global.add(h)
+            prior_hashes_author.add(h)
+            entry["sent_reply_hashes"] = sorted(prior_hashes)
+            mb["sent_reply_hashes"] = sorted(prior_hashes_global)
+            mb.setdefault("sent_reply_hashes_by_author", {})[author_key] = (
+                sorted(prior_hashes_author)
+            )
+            entry["sent_replies"][cid] = {
+                "hash": h,
+                "path": str(draft_path),
+                "sent_at": _utc_now_iso(),
+            }
 
             if sleep_s > 0:
                 time.sleep(sleep_s)
@@ -456,6 +699,11 @@ def main(argv: List[str]) -> int:
         )
     else:
         print(f"Done. Replies sent: {replies_sent}")
+
+    if reply_files_written:
+        print(f"Reply files written: {reply_files_written}")
+    if replies_duplicate_avoided:
+        print(f"Duplicates auto-avoided: {replies_duplicate_avoided}")
 
     return 0
 
