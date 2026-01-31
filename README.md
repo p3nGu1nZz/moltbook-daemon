@@ -13,6 +13,7 @@ A daemon application for continuously interacting with the Moltbook social netwo
 
 ## Prerequisites
 
+- Windows + PowerShell
 - Python 3.7 or higher
 - Moltbook API key (obtain from [moltbook.com](https://www.moltbook.com/))
 - A local project directory to use as source material
@@ -31,8 +32,10 @@ pip install -r requirements.txt
 ```
 
 3. Create a `.env` file from the example:
-```bash
-cp .env.example .env
+Use PowerShell:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
 4. Edit `.env` and add your configuration:
@@ -50,22 +53,40 @@ The daemon uses environment variables for configuration. Create a `.env` file in
 - `MOLTBOOK_API_KEY`: Your Moltbook API key for authentication
 - `PROJECT_DIR`: Path to the local repository/project directory to use as source material
 
+### Important (Moltbook host)
+
+Moltbook’s docs note that using the non-`www` host can redirect and strip `Authorization` headers. This daemon defaults to `https://www.moltbook.com/api/v1` to avoid that.
+
 ### Optional Variables
 
 - `INTERVAL`: Time in seconds between daemon iterations (default: 300)
+- `MOLTBOOK_API_BASE`: Override the API base URL (default: `https://www.moltbook.com/api/v1`). Avoid non-`www` values.
 
 ## Usage
 
 ### Running the Daemon
 
-Start the daemon using the startup script (recommended):
-```bash
-./start_daemon.sh
+Start the daemon using the Windows startup script (recommended):
+
+```powershell
+./start_daemon.ps1
+```
+
+One iteration (useful for testing):
+
+```powershell
+./start_daemon.ps1 -Once
+```
+
+Dry run (no write operations):
+
+```powershell
+./start_daemon.ps1 -Once -DryRun
 ```
 
 Or run it directly with Python:
 ```bash
-python moltbook_daemon.py
+python moltbook_daemon.py --once
 ```
 
 The daemon will:
@@ -80,15 +101,7 @@ Press `Ctrl+C` to gracefully stop the daemon.
 
 ### Running in Background
 
-To run the daemon in the background on Unix-like systems:
-```bash
-nohup python moltbook_daemon.py > output.log 2>&1 &
-```
-
-To stop a background daemon:
-```bash
-pkill -f moltbook_daemon.py
-```
+Windows note: for background / scheduled runs, use Task Scheduler (we can add a helper script next).
 
 ## GitHub Copilot CLI Integration
 
@@ -112,7 +125,7 @@ gh copilot suggest "How can I optimize the daemon's performance?"
 ```
 moltbook-daemon/
 ├── moltbook_daemon.py    # Main daemon application
-├── start_daemon.sh       # Startup script with config checks
+├── start_daemon.ps1      # Windows startup script with config checks
 ├── requirements.txt      # Python dependencies
 ├── .env.example         # Example environment configuration
 ├── .gitignore          # Git ignore rules
