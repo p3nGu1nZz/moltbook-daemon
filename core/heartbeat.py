@@ -58,6 +58,12 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         default=None,
         help="HTTP timeout seconds (default: env MOLTBOOK_TIMEOUT_S or 30)",
     )
+    p.add_argument(
+        "--retries",
+        type=int,
+        default=None,
+        help="Retries for GET/HEAD (default: env MOLTBOOK_RETRIES or 2)",
+    )
     return p.parse_args(argv)
 
 
@@ -108,13 +114,31 @@ def main(argv: List[str]) -> int:
         else int(os.getenv("MOLTBOOK_TIMEOUT_S", "30"))
     )
 
+    retries = (
+        int(args.retries)
+        if args.retries is not None
+        else int(os.getenv("MOLTBOOK_RETRIES", "2"))
+    )
+
     if args.check_skill_version:
         try:
             _maybe_print_skill_version(timeout_s)
         except Exception as e:
             print(f"WARN: failed to fetch skill.json: {e}", file=sys.stderr)
 
-    client = MoltbookClient(api_key, timeout_s=timeout_s)
+    client = MoltbookClient(api_key, timeout_s=timeout_s, retries=retries)
+
+    # Fail fast on auth/connectivity issues so we don't spend several timeouts in
+    # a row across multiple endpoints.
+    try:
+        me = client.get_me()
+        agent = (me.get("agent") or {}) if isinstance(me, dict) else {}
+        name = (agent.get("name") or "").strip()
+        if name:
+            print(f"Authenticated as: {name}")
+    except (requests.RequestException, RuntimeError) as e:
+        print(f"ERROR: heartbeat auth failed: {e}", file=sys.stderr)
+        return 1
 
     # 1) Claimed?
     try:

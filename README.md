@@ -62,7 +62,7 @@ Moltbook’s docs note that using the non-`www` host can redirect and strip `Aut
 - `INTERVAL`: Time in seconds between daemon iterations (default: 300)
 - `MOLTBOOK_API_BASE`: Override the API base URL (default: `https://www.moltbook.com/api/v1`). Avoid non-`www` values.
 - `MOLTBOOK_SUBMOLT`: Default submolt/community to post updates into when using `--post` (default: `general`).
-- `STATE_FILE`: Path to the daemon state JSON file (default: `.moltbook_daemon_state.json` next to `moltbook_daemon.py`).
+- `STATE_FILE`: Path to the daemon state JSON file (default: `.moltbook_daemon_state.json` in the repo root).
 - `MAX_CONTENT_CHARS`: Max characters for generated post content (default: 3500).
 - `MAX_COMMITS`: Max commits included in update posts (default: 10).
 - `MAX_FILES`: Max changed files included in update posts (default: 25).
@@ -97,12 +97,6 @@ Actually post an update (only when changes are detected):
 ./start_daemon.ps1 -Once -Post
 ```
 
-First-time introduction post (recommended once per project):
-
-```powershell
-./start_daemon.ps1 -Once -Post -Intro
-```
-
 Post into a specific submolt:
 
 ```powershell
@@ -117,19 +111,13 @@ Force a status post even when nothing changed (still cooldown-limited):
 
 Or run it directly with Python:
 ```bash
-python moltbook_daemon.py --once
+python -m core.moltbook_daemon --once
 ```
 
 To post from the CLI:
 
 ```bash
-python moltbook_daemon.py --once --post --submolt general
-```
-
-Intro post from the CLI:
-
-```bash
-python moltbook_daemon.py --once --post --intro --submolt general
+python -m core.moltbook_daemon --once --post --submolt general
 ```
 
 The daemon will:
@@ -143,19 +131,19 @@ The daemon will:
 Create a post:
 
 ```bash
-python actions/create_post.py --submolt general --title "Hello" --content "World"
+python -m actions.create_post --submolt general --title "Hello" --content "World"
 ```
 
 Use the built-in announcement template:
 
 ```bash
-python actions/create_post.py --announcement --submolt general
+python -m actions.create_post --announcement --submolt general
 ```
 
 View your recent posts:
 
 ```bash
-python actions/view_posts.py --limit 10
+python -m actions.view_posts --limit 10
 ```
 
 ### Heartbeat checks
@@ -163,7 +151,7 @@ python actions/view_posts.py --limit 10
 Run a lightweight “are we alive?” routine (no auto-posting):
 
 ```bash
-python heartbeat.py --limit 10 --also-global
+python -m core.heartbeat --limit 10 --also-global
 ```
 
 ### Stopping the Daemon
@@ -198,11 +186,12 @@ moltbook-daemon/
 ├── actions/             # Standalone CLIs (also importable helpers)
 │   ├── create_post.py   # Create a post (daemon uses this helper)
 │   └── view_posts.py    # View your recent posts
+├── core/                # Core library + entry points
+│   ├── authorize.py     # Auth/credential check helper
+│   ├── heartbeat.py     # Heartbeat checks (status/DM/feed)
+│   ├── moltbook_client.py  # Reusable Moltbook API client
+│   └── moltbook_daemon.py  # Main daemon application
 ├── AGENT.md             # Agent-facing operational docs
-├── heartbeat.py         # Heartbeat checks (status/DM/feed)
-├── moltbook_client.py   # Reusable Moltbook API client
-├── moltbook_daemon.py    # Main daemon application
-├── post_moltbook_announcement.py  # Legacy wrapper (delegates to actions)
 ├── start_daemon.ps1      # Windows startup script with config checks
 ├── requirements.txt      # Python dependencies
 ├── .env.example         # Example environment configuration

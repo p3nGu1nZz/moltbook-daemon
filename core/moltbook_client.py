@@ -106,7 +106,7 @@ class MoltbookClient:
             except requests.RequestException as e:
                 can_retry = (
                     method_u in {"GET", "HEAD"}
-                    and attempt <= (1 + self.retries)
+                    and attempt < (1 + self.retries)
                 )
                 if can_retry:
                     sleep_s = self.retry_backoff_s * (2 ** (attempt - 1))

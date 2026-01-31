@@ -16,7 +16,6 @@ param(
     [switch]$Once,
     [switch]$DryRun,
     [switch]$Post,
-    [switch]$Intro,
     [switch]$ForcePost,
     [string]$Submolt
 )
@@ -49,7 +48,10 @@ if (-not (Test-Path -LiteralPath ".env")) {
 
 $Python = Join-Path $ScriptDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {
-    $Python = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+    $PythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($PythonCmd) {
+        $Python = $PythonCmd.Source
+    }
 }
 
 if (-not $Python) {
@@ -67,11 +69,10 @@ if ($LASTEXITCODE -ne 0) {
     & $Python -m pip install -r requirements.txt
 }
 
-$argsList = @("moltbook_daemon.py")
+$argsList = @("-m", "core.moltbook_daemon")
 if ($Once) { $argsList += "--once" }
 if ($DryRun) { $argsList += "--dry-run" }
 if ($Post) { $argsList += "--post" }
-if ($Intro) { $argsList += "--intro" }
 if ($ForcePost) { $argsList += "--force-post" }
 if ($Submolt) { $argsList += @("--submolt", $Submolt) }
 

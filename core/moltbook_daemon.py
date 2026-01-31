@@ -297,7 +297,6 @@ class MoltbookDaemon:
         dry_run=False,
         once=False,
         post_enabled=False,
-        intro_enabled=False,
         force_post=False,
         submolt='general',
         max_content_chars=3500,
@@ -326,7 +325,6 @@ class MoltbookDaemon:
         self.once = once
         self.dry_run = dry_run
         self.post_enabled = post_enabled
-        self.intro_enabled = intro_enabled
         self.force_post = force_post
         self.submolt = submolt
         self.max_content_chars = max_content_chars
@@ -336,7 +334,7 @@ class MoltbookDaemon:
         state_path = (
             state_file
             or os.getenv('STATE_FILE')
-            or (Path(__file__).resolve().parent / '.moltbook_daemon_state.json')
+            or (Path(__file__).resolve().parents[1] / '.moltbook_daemon_state.json')
         )
         self.state_store = StateStore(state_path)
         self.state = self.state_store.load()
@@ -366,17 +364,6 @@ class MoltbookDaemon:
             f"Delta mode={delta.get('mode')} has_changes={delta.get('has_changes')} "
             f"head={delta.get('head')}"
         )
-
-        # Optional: one-time intro post for a new project
-        if self.intro_enabled and not proj_state.get('intro_posted'):
-            title, content = self._render_intro_post(delta, project_summary)
-            logger.info("Draft post title: " + title)
-            logger.info("Draft post content preview:\n" + content[:800])
-
-            if self.post_enabled:
-                posted = self._maybe_post_update(proj_key, proj_state, title, content)
-                if posted:
-                    proj_state['intro_posted'] = True
 
         if delta.get('has_changes'):
             title, content = self._render_update_post(delta, project_summary)
@@ -419,32 +406,6 @@ class MoltbookDaemon:
             proj_state['last_scan_epoch'] = delta.get('scan_epoch')
         self.state['projects'][proj_key] = proj_state
         self.state_store.save(self.state)
-
-    def _render_intro_post(self, delta, project_summary):
-        project_name = self.project_reader.project_dir.name
-        now_local = time.strftime('%Y-%m-%d %H:%M')
-
-        title = f"Hello Moltbook — tracking {project_name}"
-        head = delta.get('head')
-
-        lines = []
-        lines.append("Hi Moltbook! 🦞")
-        lines.append("")
-        lines.append(f"I'm a daemon agent tracking a local project: **{project_name}**.")
-        if head:
-            lines.append(f"Current git HEAD: `{head[:12]}`")
-        lines.append(f"Started at: {now_local}")
-        lines.append("")
-        lines.append("What I'll post:")
-        lines.append("- Small updates when meaningful changes occur")
-        lines.append("- (Optionally) summaries of recent commits and key file changes")
-        lines.append("")
-        if "README preview:" in project_summary:
-            lines.append("README preview:")
-            lines.append(project_summary.split("README preview:", 1)[1].strip())
-
-        content = _truncate("\n".join(lines).strip(), self.max_content_chars)
-        return title, content
 
     def _render_status_post(self, delta, project_summary):
         project_name = self.project_reader.project_dir.name
@@ -601,11 +562,6 @@ def main():
         help='Actually create Moltbook posts when changes are detected'
     )
     parser.add_argument(
-        '--intro',
-        action='store_true',
-        help='Create a one-time introduction post for this project (also drafted if --post not set)'
-    )
-    parser.add_argument(
         '--force-post',
         action='store_true',
         help='Create a status post even when no changes are detected (requires --post)'
@@ -636,7 +592,7 @@ def main():
     parser.add_argument(
         '--state-file',
         default=None,
-        help='Path to state JSON file (default: .moltbook_daemon_state.json next to this script)'
+        help='Path to state JSON file (default: .moltbook_daemon_state.json in repo root)'
     )
     args = parser.parse_args()
 
@@ -688,7 +644,6 @@ def main():
             dry_run=args.dry_run,
             once=args.once,
             post_enabled=args.post,
-            intro_enabled=args.intro,
             force_post=args.force_post,
             submolt=submolt,
             max_content_chars=max_content_chars,

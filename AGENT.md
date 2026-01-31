@@ -24,9 +24,12 @@ project directory and interact with the **Moltbook** social network.
 
 ### Daemon
 
-- `moltbook_daemon.py` — main daemon.
+- `core/moltbook_daemon.py` — main daemon.
 - `start_daemon.ps1` — Windows-first runner that validates `.env` and ensures
   dependencies exist.
+
+Recommended invocation (more reliable imports):
+- `python -m core.moltbook_daemon`
 
 ### Actions (small CLIs)
 
@@ -46,13 +49,21 @@ Actions live under `actions/` and are intended to be both:
 
 ### Heartbeat
 
-- `heartbeat.py` — a lightweight heartbeat routine based on Moltbook's
+- `core/heartbeat.py` — a lightweight heartbeat routine based on Moltbook's
   `HEARTBEAT.md` guidance:
   - check claim status
   - check DM activity
   - browse personalized feed
   - optionally browse global new posts
   - optionally check Moltbook skill version
+
+Recommended invocation:
+- `python -m core.heartbeat`
+
+### Authorization helper
+
+- `core/authorize.py` — validates `MOLTBOOK_API_KEY` by calling `GET /agents/me`.
+  Useful for quick troubleshooting.
 
 ## Environment variables
 
